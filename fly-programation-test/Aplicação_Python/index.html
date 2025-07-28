@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Controle de Drone</title>
+    <script src="blockly/blockly_compressed.js"></script>
+    <script src="blockly/msg/js/pt.js"></script>
+    <script src="blockly/blocks_compressed.js"></script>
+    <script src="blockly/python_compressed.js"></script>
+    <style>
+        body { font-family: sans-serif; }
+        .button-container { margin-bottom: 10px; }
+        #blocklyDiv {
+            height: 600px;
+            width: 90%;
+        }
+        #manualControlDiv { display: none; padding: 10px; display: flex; gap: 20px; }
+        #hudContainer { width: 600px; height: 450px; border: 2px solid #333; position: relative; background-color: #78C5EC; }
+        #hudCanvas { width: 100%; height: 100%; }
+        #telemetry-readouts { font-family: 'Courier New', Courier, monospace; font-size: 1.1em; background-color: #222; color: #0f0; padding: 10px; border-radius: 5px; width: 250px; }
+        #manual-actions { display: flex; flex-direction: column; gap: 10px; }
+        #manual-actions button { padding: 15px; font-size: 1.1em; cursor: pointer; }
+        #telemetry_armed { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Editor de Missão para Drone</h1>
+    <div class="button-container">
+		<h3 style="margin-top:20px; margin-bottom:5px;">Configuração</h3>
+		<button onclick="pywebview.api.drone_calibrate_level()">Calibrar Nível</button>
+		<button onclick="confirmReboot()">Reiniciar Drone</button>
+	
+		<h3 style="margin-top:20px; margin-bottom:5px;"></h3>
+        <button id="blocklyModeBtn" onclick="switchToBlocklyMode()" disabled>Editor de Blocos</button>
+        
+		<button id="runMissionBtn" onclick="executarCodigoPython()">Executar Missão no Drone</button>
+		
+		<button id="abortBtn" onclick="pywebview.api.drone_abort_mission()" style="background-color: #FF6347; color: white;">Encerrar Missão e Pousar</button>
+		
+		<button id="manualModeBtn" onclick="switchToManualMode()">Controle Manual</button>
+        
+        
+        
+        <hr>
+    </div>
+
+    <div id="blocklyDiv"></div>
+
+    <div id="manualControlDiv">
+        <div id="manual-actions">
+            <h2>Ações</h2>
+            <button onclick="pywebview.api.drone_arm_disarm()">Armar/Desarmar</button>
+            <button onclick="pywebview.api.drone_takeoff()">Decolar</button>
+            <button onclick="pywebview.api.drone_land()">Pousar</button>
+			
+
+            <h3 style="margin-top:20px; margin-bottom:5px;">Modos</h3>
+            <button onclick="pywebview.api.drone_set_mode('STABILIZE')">Stabilize</button>
+            <button onclick="pywebview.api.drone_set_mode('LOITER')">Loiter</button>
+            <button onclick="pywebview.api.drone_set_mode('GUIDED')">Guided</button>
+            
+            <p style="margin-top: 20px;">Use as teclas W,A,S,D,Q,E e Setas para pilotar.</p>
+        </div>
+        <div id="hudContainer">
+            <canvas id="hudCanvas" width="600" height="450"></canvas>
+        </div>
+        <div id="telemetry-readouts">
+            <h2>Telemetria</h2>
+            <p>Modo: <span id="telemetry_mode">N/A</span></p>
+            <p>Status: <span id="telemetry_armed">N/A</span></p>
+            <p>Altitude: <span id="telemetry_alt">0.0</span> m</p>
+            <p>Velocidade: <span id="telemetry_gs">0.0</span> m/s</p>
+            <p>Bateria: <span id="telemetry_batt">0% (0.0v)</span></p>
+            <p>GPS Fix: <span id="telemetry_gps">N/A</span></p>
+        </div>
+    </div>
+    
+    <xml id="toolbox" style="display: none">
+        <category name="Controle Principal" colour="230"><block type="drone_arm"></block><block type="drone_disarm"></block><block type="drone_takeoff"><value name="ALTITUDE"><shadow type="math_number"><field name="NUM">1.0</field></shadow></value></block><block type="drone_land"></block><block type="drone_wait"><value name="SECONDS"><shadow type="math_number"><field name="NUM">3</field></shadow></value></block></category>
+        <sep></sep>
+        <category name="Movimento" colour="120"><block type="drone_turn"><value name="DEGREES"><shadow type="math_number"><field name="NUM">90</field></shadow></value></block><block type="drone_move_meters"><value name="NORTH"><shadow type="math_number"><field name="NUM">1</field></shadow></value><value name="EAST"><shadow type="math_number"><field name="NUM">0</field></shadow></value><value name="DOWN"><shadow type="math_number"><field name="NUM">0</field></shadow></value></block></category>
+        <sep></sep>
+        <category name="Lógica" colour="%{BKY_LOGIC_HUE}"><block type="controls_if"></block><block type="logic_compare"></block></category>
+        <category name="Loops" colour="%{BKY_LOOPS_HUE}"><block type="controls_repeat_ext"><value name="TIMES"><shadow type="math_number"><field name="NUM">10</field></shadow></value></block></category>
+        <category name="Matemática" colour="%{BKY_MATH_HUE}"><block type="math_number"></block></category>
+    </xml>
+
+    <script>
+        // CÓDIGO DO BLOCKLY
+        Blockly.defineBlocksWithJsonArray([{"type":"drone_arm","message0":"Armar Drone","previousStatement":null,"nextStatement":null,"colour":230,"tooltip":"Arma os motores do drone."},{"type":"drone_disarm","message0":"Desarmar Drone","previousStatement":null,"nextStatement":null,"colour":230,"tooltip":"Desarma os motores do drone."},{"type":"drone_land","message0":"Pousar drone","previousStatement":null,"nextStatement":null,"colour":230,"tooltip":"Pousa o drone na localização atual."},{"type":"drone_takeoff","message0":"Decolar para %1 metros","args0":[{"type":"input_value","name":"ALTITUDE","check":"Number"}],"previousStatement":null,"nextStatement":null,"colour":230,"tooltip":"Decola o drone para uma altitude específica."},{"type":"drone_wait","message0":"Esperar %1 segundos","args0":[{"type":"input_value","name":"SECONDS","check":"Number"}],"previousStatement":null,"nextStatement":null,"colour":45,"tooltip":"Pausa a missão por um tempo determinado."},{"type":"drone_move_meters","message0":"Mover (em metros):","message1":"Frente (+)/Trás (-): %1","args1":[{"type":"input_value","name":"NORTH","check":"Number"}],"message2":"Direita (+)/Esquerda (-): %1","args2":[{"type":"input_value","name":"EAST","check":"Number"}],"message3":"Cima (-)/Baixo (+): %1","args3":[{"type":"input_value","name":"DOWN","check":"Number"}],"previousStatement":null,"nextStatement":null,"colour":120,"tooltip":"Move o drone uma distância específica em metros com velocidade fixa."},{"type":"drone_turn","message0":"Girar %1 graus %2","args0":[{"type":"input_value","name":"DEGREES","check":"Number"},{"type":"field_dropdown","name":"DIRECTION","options":[["sentido horário ↻","1"],["sentido anti-horário ↺","-1"]]}],"previousStatement":null,"nextStatement":null,"colour":120,"tooltip":"Gira o drone no próprio eixo (yaw)."}]);
+        Blockly.Python['drone_arm']=function(b){return 'drone.arm()\n';};Blockly.Python['drone_disarm']=function(b){return 'drone.disarm()\n';};Blockly.Python['drone_land']=function(b){return 'drone.land()\n';};Blockly.Python['drone_takeoff']=function(b){var a=Blockly.Python.valueToCode(b,'ALTITUDE',Blockly.Python.ORDER_ATOMIC)||0;return `drone.takeoff(${a})\n`;};Blockly.Python['drone_wait']=function(b){var a=Blockly.Python.valueToCode(b,'SECONDS',Blockly.Python.ORDER_ATOMIC)||1;return `drone.wait(${a})\n`;};Blockly.Python['drone_move_meters']=function(b){var n=Blockly.Python.valueToCode(b,'NORTH',Blockly.Python.ORDER_ATOMIC)||0;var e=Blockly.Python.valueToCode(b,'EAST',Blockly.Python.ORDER_ATOMIC)||0;var d=Blockly.Python.valueToCode(b,'DOWN',Blockly.Python.ORDER_ATOMIC)||0;return `drone.move_meters(north_m=${n}, east_m=${e}, down_m=${d})\n`;};Blockly.Python['drone_turn']=function(b){var d=Blockly.Python.valueToCode(b,'DEGREES',Blockly.Python.ORDER_ATOMIC)||0;var dir=b.getFieldValue('DIRECTION');return `drone.turn_degrees(${d*parseInt(dir)})\n`;};
+
+        var workspace = Blockly.inject('blocklyDiv', {
+            toolbox: document.getElementById('toolbox')
+        });
+
+        function getCode() {
+            return Blockly.Python.workspaceToCode(workspace);
+        }
+
+        // =======================================================
+        // === CÓDIGO DO MODO MANUAL E HUD ===
+        // =======================================================
+
+        // Referências aos elementos da página
+        const blocklyDiv=document.getElementById('blocklyDiv');
+        const manualControlDiv=document.getElementById('manualControlDiv');
+        const blocklyModeBtn=document.getElementById('blocklyModeBtn');
+        const manualModeBtn=document.getElementById('manualModeBtn');
+        const runMissionBtn = document.getElementById('runMissionBtn'); // <-- Referência ao botão adicionada
+
+        // Função para executar o código dos blocos
+        async function executarCodigoPython(){
+            await pywebview.api.run_blockly_code();
+        }
+
+        // Funções para trocar de modo de visualização
+        function switchToBlocklyMode(){
+            manualControlDiv.style.display='none';
+            blocklyDiv.style.display='block';
+            runMissionBtn.style.display = 'inline-block'; // <-- Linha adicionada
+            manualModeBtn.disabled=false;
+            blocklyModeBtn.disabled=true;
+            pywebview.api.set_manual_mode(false);
+            Blockly.svgResize(workspace);
+        }
+        function switchToManualMode(){
+            blocklyDiv.style.display='none';
+            manualControlDiv.style.display='flex';
+            runMissionBtn.style.display = 'none'; // <-- Linha adicionada
+            manualModeBtn.disabled=true;
+            blocklyModeBtn.disabled=false;
+            pywebview.api.set_manual_mode(true);
+        }
+		
+		function confirmReboot() {
+			if (confirm("Você tem certeza que deseja reiniciar o drone? A conexão será perdida e a aplicação pode precisar ser reiniciada.")) {
+				pywebview.api.drone_reboot_autopilot();
+			}
+		}
+
+        // Lógica do teclado para controle manual
+        const keyMap={'w':'forward','s':'backward','a':'left','d':'right','arrowup':'up','arrowdown':'down','q':'yaw_left','e':'yaw_right'};const keysPressed={};document.addEventListener('keydown',(event)=>{const direction=keyMap[event.key.toLowerCase()];if(direction&&!keysPressed[event.key.toLowerCase()]){keysPressed[event.key.toLowerCase()]=true;pywebview.api.manual_command(direction,true);}});document.addEventListener('keyup',(event)=>{const direction=keyMap[event.key.toLowerCase()];if(direction){keysPressed[event.key.toLowerCase()]=false;pywebview.api.manual_command(direction,false);}});
+
+        // Lógica do HUD
+        const canvas=document.getElementById('hudCanvas');const ctx=canvas.getContext('2d');const mode_el=document.getElementById('telemetry_mode');const armed_el=document.getElementById('telemetry_armed');const alt_el=document.getElementById('telemetry_alt');const gs_el=document.getElementById('telemetry_gs');const batt_el=document.getElementById('telemetry_batt');const gps_el=document.getElementById('telemetry_gps');
+        function update_hud(data){mode_el.innerText=data.mode;armed_el.innerText=data.armed?"ARMADO":"DESARMADO";alt_el.innerText=data.altitude.toFixed(1);gs_el.innerText=data.ground_speed?data.ground_speed.toFixed(1):'0.0';batt_el.innerText=`${data.battery_perc}% (${data.battery_volt.toFixed(1)}v)`;const gps_status=["No GPS","No Fix","2D Fix","3D Fix","DGPS","RTK Float","RTK Fixed"];gps_el.innerText=gps_status[data.gps_fix]||"Unknown";armed_el.style.color=data.armed?"#00FF00":"#FF0000";drawArtificialHorizon(data.pitch,data.roll);}
+        function drawArtificialHorizon(pitch,roll){ctx.clearRect(0,0,canvas.width,canvas.height);ctx.save();ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(roll*Math.PI/180);const pitch_px=pitch*7;ctx.fillStyle='#4A9A4A';ctx.fillRect(-canvas.width,pitch_px,canvas.width*2,canvas.height);ctx.strokeStyle='#FFF';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(-canvas.width,pitch_px);ctx.lineTo(canvas.width,pitch_px);ctx.stroke();ctx.restore();ctx.strokeStyle='#FFD700';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(canvas.width/2-50,canvas.height/2);ctx.lineTo(canvas.width/2-20,canvas.height/2);ctx.moveTo(canvas.width/2-20,canvas.height/2);ctx.lineTo(canvas.width/2,canvas.height/2+10);ctx.moveTo(canvas.width/2,canvas.height/2+10);ctx.lineTo(canvas.width/2+20,canvas.height/2);ctx.moveTo(canvas.width/2+20,canvas.height/2);ctx.lineTo(canvas.width/2+50,canvas.height/2);ctx.stroke();}
+    </script>
+</body>
+</html>
