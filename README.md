@@ -48,8 +48,8 @@ O objetivo é fornecer uma plataforma completa que cresce junto com o conhecimen
 - ✅ **Plataforma Aberta:** Hardware de baixo custo e software totalmente open-source.
 - 🧱 **Programação em Blocos:** Interface baseada em Blockly para planejamento de missões sem a necessidade de escrever código.
 - 🐍 **Controle via Python:** Scripts prontos para controle manual e exemplos de como criar suas próprias aplicações.
-- 信頼 **Confiabilidade ArduPilot:** Utiliza um dos mais avançados e seguros firmwares de voo do mundo.
-- ミニ **Design Compacto e Seguro:** Projetado para ser pequeno e leve, ideal para ambientes internos e de sala de aula.
+- 🚀 **Confiabilidade ArduPilot:** Utiliza um dos mais avançados e seguros firmwares de voo do mundo.
+- 🔐 **Design Compacto e Seguro:** Projetado para ser pequeno e leve, ideal para ambientes internos e de sala de aula.
 
 ## 🎓 Atividades Pedagógicas Sugeridas
 
@@ -75,7 +75,7 @@ Este projeto pode ser usado em diversas atividades em sala de aula:
 | **Controle Manual** | Python 3, [DroneKit](https://dronekit.io/) ou [Pymavlink](https://mavlink.io/en/getting_started/python.html) |
 | **Programação Visual** | [Google Blockly](https://developers.google.com/blockly) |
 | **Comunicação** | Protocolo MAVLink                                 |
-| **Modelagem 3D** | Fusion 360 / Tinkercad (Mencione o que você usou) |
+| **Modelagem 3D** | Fusion 360 / Onshape / FreeCAD |
 
 ## 🚀 Como Começar (Guia de Instalação)
 
