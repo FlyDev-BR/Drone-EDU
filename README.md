@@ -31,9 +31,7 @@
 - [Principais Recursos](#-principais-recursos)
 - [Atividades Pedagógicas Sugeridas](#-atividades-pedagógicas-sugeridas)
 - [Tecnologias Utilizadas](#-tecnologias-utilizadas)
-- [Componentes (Hardware)](#-componentes-hardware)
 - [Como Começar (Guia de Instalação)](#-como-começar-guia-de-instalação)
-- [Estrutura do Repositório](#-estrutura-do-repositório)
 - [Como Contribuir](#-como-contribuir)
 
 ## 💡 Visão Geral
