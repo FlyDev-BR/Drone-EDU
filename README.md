@@ -1,4 +1,4 @@
-# EduDrone: Mini Drone Educacional com ArduPilot
+# DroneEDU: Mini Drone Educacional com ArduPilot
 
 <p align="center">
   <img src="https://img.shields.io/badge/Foco-Educação%20STEM-blue" alt="Foco do Projeto">
