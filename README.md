@@ -15,7 +15,7 @@
 
 <p align="center">
   <strong>Programando uma Missão com Blocos (Blockly)</strong><br>
-  <img src="URL_DO_SEU_GIF_DO_BLOCKLY" alt="Demonstração da interface Blockly" width="600"/>
+  <img src="[URL_DO_SEU_GIF_DO_BLOCKLY](https://drive.google.com/file/d/1_ba9QHUma-0M7_WRc8FtGqlYcwp4A16s/view?usp=sharing)" alt="Demonstração da interface Blockly" width="600"/>
   <em>Interface intuitiva que permite a criação de missões de voo autônomas arrastando e soltando blocos. Perfeito para iniciantes!</em>
 </p>
 
