@@ -15,7 +15,7 @@
 
 <p align="center">
   <strong>Programando uma Missão com Blocos (Blockly)</strong><br>
-  <img src="https://drive.google.com/file/d/1_ba9QHUma-0M7_WRc8FtGqlYcwp4A16s/view?usp=sharing" alt="Demonstração da interface Blockly" width="600"/>
+  <img src="https://github.com/FlyDev-BR/Drone-EDU/blob/88261246fadb672c746968580a1efe0b38a083e6/GIF%20-%20Editor%20de%20Blocos.mp4" alt="Demonstração da interface Blockly" width="600"/>
   <em>Interface intuitiva que permite a criação de missões de voo autônomas arrastando e soltando blocos. Perfeito para iniciantes!</em>
 </p>
 
