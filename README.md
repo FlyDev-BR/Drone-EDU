@@ -16,12 +16,14 @@
 <p align="center">
   <strong>Programando uma Missão com Blocos (Blockly)</strong><br>
   <img src="https://github.com/FlyDev-BR/Drone-EDU/blob/80394c6257cd42524662f0e738a5215373a57657/GIF-Editor-de-Blocos.gif" alt="Demonstração da interface Blockly" width="600"/>
+	
   <em>Interface intuitiva que permite a criação de missões de voo autônomas arrastando e soltando blocos. Perfeito para iniciantes!</em>
 </p>
 
 <p align="center">
   <strong>Controlando o Drone Manualmente com Python</strong><br>
-  <img src="URL_DO_SEU_GIF_DO_CONTROLE_PYTHON" alt="Demonstração do controle manual com Python" width="600"/>
+  <img src="https://github.com/FlyDev-BR/Drone-EDU/blob/7e3a8ffd5d2195cf50fc595d52966e2db3bd2700/GIF-Modo-Manual.gif" alt="Demonstração do controle manual com Python" width="600"/>
+	
   <em>Script em Python que permite o controle manual do drone via teclado, ideal para entender a comunicação e controle em tempo real.</em>
 </p>
 
