@@ -4,7 +4,7 @@ from pymavlink import mavutil
 import time
 import math
 
-RASPBERRY_PI_IP = "192.168.4.1" 
+RASPBERRY_PI_IP = "192.168.4.1"
 MAVLINK_TCP_PORT = "5760"
 CONNECTION_STRING = f'tcp:{RASPBERRY_PI_IP}:{MAVLINK_TCP_PORT}'
 
@@ -15,7 +15,7 @@ class DroneAPI:
         print("Aguardando heartbeat do drone...")
         self.master.wait_heartbeat()
         print("Heartbeat recebido! Drone conectado e pronto.")
-    
+
     def arm(self):
         """Arma os motores do drone."""
         print("Armando o drone...")
@@ -23,6 +23,7 @@ class DroneAPI:
             self.master.target_system, self.master.target_component,
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0, 1, 0, 0, 0, 0, 0, 0)
         print("Comando de armar enviado.")
+        time.sleep(1)
 
     def disarm(self):
         """Desarma os motores do drone."""
@@ -39,7 +40,7 @@ class DroneAPI:
             self.master.target_system, self.master.target_component,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, altitude_metros)
         print("Comando de decolagem enviado.")
-        
+
     def land(self):
         """Pousa o drone na localização atual."""
         print("Pousando...")
@@ -53,7 +54,7 @@ class DroneAPI:
         self.master.mav.set_position_target_local_ned_send(
             0, self.master.target_system, self.master.target_component,
             mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED,
-            0b0000100111000111, 
+            0b0000100111000111,
             0, 0, 0, vx, vy, vz, 0, 0, 0, 0, math.radians(yaw_rate_deg_s))
 
     def set_mode(self, mode_name):
@@ -75,7 +76,7 @@ class DroneAPI:
         print(f"Aguardando por {seconds} segundos...")
         time.sleep(seconds)
         print("Espera finalizada.")
-    
+
     def turn_degrees(self, degrees, speed=30):
         """Gira o drone em seu próprio eixo (yaw) em modo de missão (ex: GUIDED)."""
         print(f"Iniciando giro de {degrees}°...")
@@ -105,7 +106,7 @@ class DroneAPI:
             0, self.master.target_system, self.master.target_component,
             mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED, 0b0000111111000111,
             0, 0, 0, velocity_x, velocity_y, velocity_z, 0, 0, 0, 0, 0)
-        for _ in range(int(duration * 5)): 
+        for _ in range(int(duration * 5)):
             self.master.mav.send(msg)
             time.sleep(0.2)
         self.stop()
@@ -120,7 +121,7 @@ class DroneAPI:
         for _ in range(5):
             self.master.mav.send(msg)
             time.sleep(0.1)
-            
+
     def calibrate_level(self):
         """Envia o comando para calibrar o nível do acelerômetro."""
         print("Enviando comando de calibração de nível...")
@@ -138,3 +139,20 @@ class DroneAPI:
             mavutil.mavlink.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
             0, 1, 0, 0, 0, 0, 0, 0)
         print("Comando de reboot enviado. A conexão será perdida.")
+        
+    def set_gpio(self, pin, state):
+        """Envia um comando customizado para controlar um pino GPIO no companion computer."""
+        MAV_CMD_SET_GPIO = 31010
+
+        print(f"Enviando comando para setar GPIO {pin} para {'HIGH' if state == 1 else 'LOW'}...")
+        
+        self.master.mav.command_long_send(
+            self.master.target_system, 
+            mavutil.mavlink.MAV_COMP_ID_ALL, # Envia para TODOS os componentes
+            MAV_CMD_SET_GPIO, 0,
+            pin,      # param1: O número do pino
+            state,    # param2: O estado (0 ou 1)
+            0, 0, 0, 0, 0)
+            
+        print("Comando de GPIO enviado para todos os componentes.")
+        time.sleep(0.5)

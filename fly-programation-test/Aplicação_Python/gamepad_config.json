@@ -1,0 +1,18 @@
+{
+    "vx": {
+        "code": "ABS_Y",
+        "invert": false
+    },
+    "vy": {
+        "code": "ABS_X",
+        "invert": false
+    },
+    "vz": {
+        "code": "ABS_RX",
+        "invert": true
+    },
+    "yaw": {
+        "code": "ABS_RY",
+        "invert": false
+    }
+}
