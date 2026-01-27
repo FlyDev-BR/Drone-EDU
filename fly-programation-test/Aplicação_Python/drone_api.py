@@ -4,7 +4,8 @@ from pymavlink import mavutil
 import time
 import math
 
-RASPBERRY_PI_IP = "192.168.4.1"
+# RASPBERRY_PI_IP = "192.168.4.1"
+RASPBERRY_PI_IP = "127.0.0.1"
 MAVLINK_TCP_PORT = "5760"
 CONNECTION_STRING = f'tcp:{RASPBERRY_PI_IP}:{MAVLINK_TCP_PORT}'
 

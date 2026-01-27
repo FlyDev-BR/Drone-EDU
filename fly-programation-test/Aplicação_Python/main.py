@@ -16,7 +16,8 @@ except ImportError:
     inputs = None
 
 # --- Constantes ---
-PI_IP_ADDRESS = "192.168.4.1"
+# PI_IP_ADDRESS = "192.168.4.1"
+PI_IP_ADDRESS = "127.0.0.1"
 MAVLINK_PORT = 5760
 COMMAND_PORT = 8000
 CONNECTION_STRING = f"tcp:{PI_IP_ADDRESS}:{MAVLINK_PORT}"
