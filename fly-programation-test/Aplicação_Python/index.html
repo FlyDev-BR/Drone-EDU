@@ -252,36 +252,27 @@
             return [code, Blockly.Python.ORDER_FUNCTION_CALL];
         };
         Blockly.Python['controls_repeat_ext'] = function(block) {
-            const repeats =
-                Blockly.Python.valueToCode(block, 'TIMES', Blockly.Python.ORDER_NONE) || '0';
-
-            const branch = Blockly.Python.statementToCode(block, 'DO');
-
-            const funcName = Blockly.Python.provideFunction_(
-                'repeat_body',
-                `
-        def ${Blockly.Python.FUNCTION_NAME_PLACEHOLDER_}():
-        ${Blockly.Python.prefixLines(branch, '    ')}
-        `
-            );
-
-            return `mission.repeat(${repeats}, ${funcName})\n`;
+            var repeats = Blockly.Python.valueToCode(block, 'TIMES', Blockly.Python.ORDER_NONE) || '0';
+            var branch = Blockly.Python.statementToCode(block, 'DO');
+            branch = Blockly.Python.addLoopTrap(branch, block.id) || Blockly.Python.PASS;
+            
+            return 'for _ in range(int(' + repeats + ')):\n' +
+                   Blockly.Python.prefixLines('mission.check_abort()', Blockly.Python.INDENT) + '\n' +
+                   branch;
         };
         Blockly.Python['controls_whileUntil'] = function(block) {
-            var until = block.getFieldValue('MODE'); 
-            var condition = Blockly.Python.valueToCode(block, 'BOOL', Blockly.Python.ORDER_NONE) || 'False';
+            var until = block.getFieldValue('MODE') === 'UNTIL';
+            var argument0 = Blockly.Python.valueToCode(block, 'BOOL',
+                until ? Blockly.Python.ORDER_LOGICAL_NOT :
+                Blockly.Python.ORDER_NONE) || 'False';
             var branch = Blockly.Python.statementToCode(block, 'DO');
-
-            if (until === 'UNTIL') {
-                condition = `not (${condition})`;
-            }
-
-            var code = `
-        mission.while_until_safe(lambda: (${condition}), lambda: (
-        ${branch}
-        ))
-        `;
-            return code;
+            branch = Blockly.Python.addLoopTrap(branch, block.id) || Blockly.Python.PASS;
+            
+            if (until) { argument0 = 'not ' + argument0; }
+            
+            return 'while ' + argument0 + ':\n' +
+                   Blockly.Python.prefixLines('mission.check_abort()', Blockly.Python.INDENT) + '\n' +
+                   branch;
         };
         Blockly.Python['controls_flow_statements'] = function(block) {
             var flow = block.getFieldValue('FLOW');
@@ -302,21 +293,28 @@
             return code;
         };
         Blockly.Python['controls_for'] = function(block) {
-            var variable = Blockly.Python.variableDB_.getName(
+            var variable0 = Blockly.Python.variableDB_.getName(
                 block.getFieldValue('VAR'), Blockly.Variables.NAME_TYPE);
-            var from = Blockly.Python.valueToCode(block, 'FROM', Blockly.Python.ORDER_NONE) || '0';
-            var to = Blockly.Python.valueToCode(block, 'TO', Blockly.Python.ORDER_NONE) || '0';
-            var step = Blockly.Python.valueToCode(block, 'BY', Blockly.Python.ORDER_NONE) || '1';
-            var branch = Blockly.Python.statementToCode(block, 'DO') || 'pass';
+            var argument0 = Blockly.Python.valueToCode(block, 'FROM',
+                Blockly.Python.ORDER_NONE) || '0';
+            var argument1 = Blockly.Python.valueToCode(block, 'TO',
+                Blockly.Python.ORDER_NONE) || '0';
+            var increment = Blockly.Python.valueToCode(block, 'BY',
+                Blockly.Python.ORDER_NONE) || '1';
+            var branch = Blockly.Python.statementToCode(block, 'DO');
+            branch = Blockly.Python.addLoopTrap(branch, block.id) || Blockly.Python.PASS;
 
-            branch = branch.replace(/\n/g, '\n        ');
-
-            var code = `
-        mission.execute_for("${variable}", ${from}, ${to}, ${step}, """
-        ${branch}
-        """)
-        `;
-            return code;
+            var code = '';
+            var range = 'range(' + argument0 + ', ' + argument1 + ' + 1, ' + increment + ')';
+            
+            return 'current_loop_var = ' + argument0 + '\n' +
+                   'end_loop_var = ' + argument1 + '\n' +
+                   'step_loop_var = ' + increment + '\n' +
+                   'while (step_loop_var > 0 and current_loop_var <= end_loop_var) or (step_loop_var < 0 and current_loop_var >= end_loop_var):\n' +
+                   '    mission.check_abort()\n' +
+                   '    ' + variable0 + ' = current_loop_var\n' +
+                   branch + 
+                   '    current_loop_var += step_loop_var\n';
         };
 
         // ### CORREÇÃO AQUI: Gerador de código descomentado ###
