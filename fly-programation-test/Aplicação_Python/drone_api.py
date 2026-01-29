@@ -182,13 +182,14 @@ class DroneAPI:
         print("Comando de GPIO enviado para todos os componentes.")
         time.sleep(0.5)
 
-     # ===================== UTIL =====================
+    # ===================== UTIL =====================
     def wait(self, seconds, abort_event=None):
         for _ in range(int(seconds * 10)):
             if abort_event and abort_event.is_set():
                 raise RuntimeError("MISSION_ABORTED")
             time.sleep(0.1)
 
+    # ===================== TELEMETRIA =====================
 
     def get_altitude(self):
         msg = self.master.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=1)
@@ -196,4 +197,42 @@ class DroneAPI:
             return 0.0
         return msg.relative_alt / 1000.0
 
-   
+    def get_pitch(self):
+        msg = self._recv('ATTITUDE')
+        return math.degrees(msg.pitch) if msg else 0.0
+
+    def get_roll(self):
+        msg = self._recv('ATTITUDE')
+        return math.degrees(msg.roll) if msg else 0.0
+
+    def get_yaw(self):
+        msg = self._recv('ATTITUDE')
+        return math.degrees(msg.yaw) if msg else 0.0
+
+    def get_ground_speed(self):
+        msg = self._recv('VFR_HUD')
+        return msg.groundspeed if msg else 0.0
+
+    def get_battery_voltage(self):
+        msg = self._recv('SYS_STATUS')
+        return (msg.voltage_battery / 1000.0) if msg else 0.0
+
+    def get_battery_percentage(self):
+        msg = self._recv('SYS_STATUS')
+        return msg.battery_remaining if msg else 0
+    
+    def get_gps_fix(self):
+        msg = self._recv('GPS_RAW_INT')
+        return msg.fix_type if msg else 0
+
+    def is_armed(self):
+        return self.master.motors_armed()
+
+    def get_mode(self):
+        return self.master.flightmode
+
+    def _recv(self, msg_type, timeout=0.01):
+        try:
+            return self.master.recv_match(type=msg_type, blocking=False)
+        except:
+            return None

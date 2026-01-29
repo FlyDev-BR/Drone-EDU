@@ -50,7 +50,7 @@ class ApiFacade:
     def drone_calibrate_level(self): return self.api.drone_calibrate_level()
     def drone_reboot_autopilot(self): return self.api.drone_reboot_autopilot()
     def save_mission(self): return self.api.save_mission()
-    def load_mission(self): return self.api.load_mission()
+    def load_mission(self): return self.api.load_mission()  
     def write_mission_data(self, data): return self.api.write_mission_data(data)
     def save_gamepad_mapping(self, mapping): return self.api.save_gamepad_mapping(mapping)
     def load_gamepad_mapping(self): return self.api.load_gamepad_mapping()
@@ -99,7 +99,7 @@ class JsApi:
         self.command_lock = threading.Lock()
 
         self.command_thread = threading.Thread(target=self._command_socket_connect, daemon=True)
-        self.js_thread = threading.Thread(target=self._js_dispatch_loop, daemon=True)
+        # self.js_thread = threading.Thread(target=self._js_dispatch_loop, daemon=True)
         self.manual_control_thread = threading.Thread(target=self._manual_control_loop, daemon=True)
         self.mission_runner_thread = threading.Thread(target=self._mission_runner_loop, daemon=True)
         self.gamepad_thread = threading.Thread(target=self._gamepad_loop, daemon=True) if inputs else None
@@ -116,16 +116,18 @@ class JsApi:
         self.last_ui_update = now
         self.js_queue.put(script)
 
-    def _js_dispatch_loop(self):
-        while not self.stop_event.is_set():
-            try:
-                script = self.js_queue.get(timeout=0.1)
-                if self.window:
-                    self.window.evaluate_js(script)  # ✅ CORREÇÃO AQUI
-            except Empty:
-                pass
-            except Exception as e:
-                print(f"Erro JS: {e}")
+    def _process_js_queue(self):
+        if not self.window:
+            return
+
+        try:
+            while True:
+                script = self.js_queue.get_nowait()
+                self.window.evaluate_js(script)
+        except Empty:
+            pass
+        except Exception as e:
+            print(f"Erro JS (UI thread): {e}")
 
     # ===================== SOCKET =====================
     def _command_socket_connect(self):
@@ -149,7 +151,6 @@ class JsApi:
         print("Janela pronta. Iniciando threads...")
         self.ui_ready = True
 
-        self.js_thread.start()
         self.command_thread.start()
         self.load_gamepad_mapping()
         self.manual_control_thread.start()
@@ -157,80 +158,124 @@ class JsApi:
 
         if self.gamepad_thread:
             self.gamepad_thread.start()
+        
+        while not self.stop_event.is_set():
+            self._process_js_queue()
+            time.sleep(0.05)
 
     # ===================== BLOCKLY =====================
     def run_blockly_code(self, code):
         with self.mission_lock:
-            if self.is_mission_running or not code:
+            
+            if self.is_mission_running and not self.mission_queue:
+                print("⚠️ Estado inconsistente detectado (Travado). Resetando sistema...", flush=True)
+                self.is_mission_running = False
+
+            if self.is_mission_running:
+                self.call_js('alert("Uma missão já está em execução!")')
+                print("🚨 Uma missão já está em execução!", flush=True)
+                return
+
+            if not code:
+                self.call_js('alert("A área de trabalho está vazia!")')
                 return
 
             self.mission_queue.clear()
+            self.abort_event.clear()
 
-            if drone and "drone." in code:
-                self.mission_queue.extend([
-                    "drone.set_mode('GUIDED')",
-                    "mission.wait(1)"
-                ])
-
-            self.mission_queue.append(code)
+            header = """
+mission.check_abort()
+if drone: drone.set_mode('GUIDED')
+"""
+            full_code = header + "\n" + code
+            
+            self.mission_queue.append(full_code)
             self.is_mission_running = True
-            print("Missão Blockly iniciada")
+            print("🚀 Missão Blockly iniciada")
+
+    def turn_degrees_safe(self, degrees):
+            """
+            Gira o drone e ESPERA o tempo necessário para completar o movimento.
+            """
+            if not drone: return
+
+            print(f"🔄 Iniciando giro de {degrees} graus...")
+            
+            try:
+                drone.turn_degrees(degrees, speed=MANUAL_YAW_RATE_DPS, abort_event=self.abort_event)
+            except TypeError:
+                drone.turn_degrees(degrees) 
+
+            wait_time = (abs(degrees) / MANUAL_YAW_RATE_DPS) + 1.5
+            
+            self.wait(wait_time)
+            print("✅ Giro concluído e estabilizado")
 
     def _mission_runner_loop(self):
-        TELEMETRY_INTERVAL = 0.2  
+        TELEMETRY_INTERVAL = 0.2
         last_telemetry_update = 0
+
+        exec_context = {
+            "drone": drone,
+            "mission": self,
+            "abort_event": self.abort_event,
+            "check_abort": self.check_abort
+        }
+
         while not self.stop_event.is_set():
             try:
-                self.check_abort()
-
                 now = time.time()
-                if now - last_telemetry_update > TELEMETRY_INTERVAL:
+                if now - last_telemetry_update >= TELEMETRY_INTERVAL:
                     self.update_telemetry()
                     last_telemetry_update = now
 
-                cmd = None
+                code = None
                 with self.mission_lock:
                     if self.mission_queue:
-                        cmd = self.mission_queue.pop(0)
+                        code = self.mission_queue.pop(0)
 
-                if cmd:
-                    stripped = cmd.rstrip()
-                    if stripped.endswith(":"):
-                        cmd += "\n    pass"
+                if code:
+                    # Verifica se o drone existe antes de tentar rodar
+                    if not drone:
+                        print("❌ Erro: Drone não conectado.", flush=True)
+                        self.call_js('alert("Erro: Drone não conectado/detectado!")')
+                        self.is_mission_running = False
+                        continue
 
-                    if stripped.lstrip().startswith("while "):
-                        cmd = cmd.replace(
-                            "while ",
-                            "while ",
-                            1
-                        )
-                        cmd += "\n    mission.while_guard(__while_counter__)"
-
-                    exec_context = {
-                        "drone": drone,
-                        "mission": self,
-                        "abort_event": self.abort_event,
-                        "__while_counter__": {"count": 0}
-                    }
-
-                    exec(cmd, exec_context)
+                    # Executa o código
+                    exec(code, exec_context)
+                    
+                    print("✅ Missão finalizada com sucesso.", flush=True)
+                    self.is_mission_running = False 
 
                 else:
-                    if self.is_mission_running:
-                        self.is_mission_running = False
+                    # CORREÇÃO CRÍTICA: Removemos o 'else: self.is_mission_running = False'
+                    # Isso impedia a missão de iniciar se o processador fosse mais rápido que o clique do mouse.
                     time.sleep(0.1)
 
             except RuntimeError as e:
                 if str(e) == "MISSION_ABORTED":
-                    print("🛑 Missão abortada com segurança")
-                    if drone:
-                        drone.land()
-                        time.sleep(1)
-                        drone.disarm()
+                    print("🛑 Missão abortada pelo usuário", flush=True)
+                    self.call_js('alert("Missão Abortada!")')
+                    try:
+                        if drone: 
+                            drone.land() # Pouso de emergência simples
+                    except: 
+                        pass
+                
+                self.is_mission_running = False
+                self.mission_queue.clear()
+                self.abort_event.clear()
 
-                    self.is_mission_running = False
-                    self.mission_queue.clear()
-                    self.abort_event.clear()
+            except Exception as e:
+                print(f"❌ Erro na execução: {e}", flush=True)
+                clean_error = str(e).replace('"', "'").replace('\n', ' ')
+                self.call_js(f'alert("Erro Python: {clean_error}")')
+                
+                self.is_mission_running = False
+                self.mission_queue.clear()
+                self.abort_event.clear()
+
 
     def execute_if(self, condition, commands):
         self.check_abort()
@@ -320,16 +365,29 @@ class JsApi:
                 if str(e) == "MISSION_ABORTED":
                     raise
 
-        # Ajusta range para não quebrar se step for negativo
+        current = start
+
         if step == 0:
-            step = 1
+            return
         if step > 0:
-            rng = range(start, end + 1, step)
+            rng = range(current, end + 1, step)
         else:
-            rng = range(start, end - 1, step)
+            rng = range(current, end - 1, step)
 
         for i in rng:
             body(i)
+
+    def send_command_to_pi(self, command_dict):
+        if not self.command_socket:
+            print("⚠️ Socket de comando não conectado")
+            return
+
+        try:
+            data = (json.dumps(command_dict) + "\n").encode("utf-8")
+            with self.command_lock:
+                self.command_socket.sendall(data)
+        except Exception as e:
+            print(f"Erro ao enviar comando para o PI: {e}")
 
 
     def abort_mission(self):
@@ -351,6 +409,55 @@ class JsApi:
             raise RuntimeError("MISSION_ABORTED")
 
     # ===================== MANUAL =====================
+    def set_manual_mode(self, active: bool):
+        self.manual_control_active = active
+        if drone:
+            if active:
+                drone.set_mode("GUIDED")
+            else:
+                drone.set_manual_velocity(0, 0, 0, 0)
+
+    def manual_command(self, direction, key_is_down):
+        speed = MANUAL_SPEED_MPS
+        yaw = MANUAL_YAW_RATE_DPS
+
+        if not key_is_down:
+            if direction in ("forward", "back"):
+                self.vx = 0
+            elif direction in ("left", "right"):
+                self.vy = 0
+            elif direction in ("up", "down"):
+                self.vz = 0
+            elif direction in ("yaw_left", "yaw_right"):
+                self.yaw_rate = 0
+            return
+
+
+        if direction == "forward":
+            self.vx = speed
+        elif direction == "back":
+            self.vx = -speed
+        elif direction == "left":
+            self.vy = -speed
+        elif direction == "right":
+            self.vy = speed
+        elif direction == "up":
+            self.vz = -speed
+        elif direction == "down":
+            self.vz = speed
+        elif direction == "yaw_left":
+            self.yaw_rate = -yaw
+        elif direction == "yaw_right":
+            self.yaw_rate = yaw
+
+    def save_gamepad_mapping(self, mapping):
+        with open(GAMEPAD_CONFIG_FILE, "w") as f:
+            json.dump(mapping, f, indent=2)
+        self.gamepad_mapping = mapping
+
+
+    # -------
+
     def _manual_control_loop(self):
         while not self.stop_event.is_set():
             with self.velocity_lock:
@@ -382,14 +489,44 @@ class JsApi:
                 time.sleep(0.1)
 
     # ===================== HELPERS =====================
+
+    # verificar depois
+    def drone_set_mode(self, mode_name):
+        if drone:
+            drone.set_mode(mode_name)
+
+    def restore_default_mapping(self):
+        self.gamepad_mapping = self.default_gamepad_mapping.copy()
+        with open(GAMEPAD_CONFIG_FILE, "w") as f:
+            json.dump(self.gamepad_mapping, f, indent=2)
+
+        self.call_js(f'populateMappingUi({json.dumps(self.gamepad_mapping)})')
+
+    # --------
+
     def drone_arm(self):
+        self.check_abort()
         if drone: drone.arm()
 
     def drone_disarm(self):
+        self.check_abort()
         if drone: drone.disarm()
 
     def drone_land(self):
+        self.check_abort()
         if drone: drone.land()
+
+    def move_meters_safe(self, n, e, d):
+        self.check_abort()
+        if drone:
+            drone.move_meters(n, e, d, abort_event=self.abort_event)
+
+    def set_led_safe(self, pin, state):
+        try:
+            cmd = {'command': 'set_gpio', 'pin': int(pin), 'state': int(state)}
+            self.send_command_to_pi(cmd)
+        except Exception as err:
+            print(f"⚠️ Aviso: Falha ao setar LED (ignorando): {err}")
 
     def drone_calibrate_level(self):
         if drone:

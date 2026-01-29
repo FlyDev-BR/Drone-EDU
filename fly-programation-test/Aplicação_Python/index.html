@@ -217,38 +217,55 @@
         ]);
 
         // Geradores Python
-        // Blockly.Python['drone_arm']=function(b){return 'drone.arm()\n';};
-        // Blockly.Python['drone_disarm']=function(b){return 'drone.disarm()\n';};
-        // Blockly.Python['drone_land']=function(b){return 'drone.land()\n';};
-        // Blockly.Python['drone_takeoff']=function(b){var a=Blockly.Python.valueToCode(b,'ALTITUDE',Blockly.Python.ORDER_ATOMIC)||0;return `drone.takeoff(${a})\n`;};
-        Blockly.Python['drone_arm'] = function(b){
-            return `mission.execute_if(True, "drone.arm()\\n")\n`;
+        Blockly.Python['drone_arm'] = function(b) {
+            return `mission.drone_arm()\n`;
         };
-        Blockly.Python['drone_disarm'] = function(b){
-            return `mission.execute_if(True, "drone.disarm()\\n")\n`;
+        Blockly.Python['drone_disarm'] = function(b) {
+            return `mission.drone_disarm()\n`;
         };
-        Blockly.Python['drone_takeoff'] = function(b){
+        Blockly.Python['drone_land'] = function(b) {
+            return `mission.drone_land()\n`;
+        };
+        Blockly.Python['drone_takeoff'] = function(b) {
             var alt = Blockly.Python.valueToCode(b,'ALTITUDE',Blockly.Python.ORDER_ATOMIC)||1.0;
-            return `mission.execute_if(True, "drone.takeoff(${alt})\\n")\n`;
+            return `mission.drone_takeoff(${alt})\n`;
         };
-        Blockly.Python['drone_land'] = function(b){
-            return `mission.execute_if(True, "drone.land()\\n")\n`;
+        Blockly.Python['drone_wait'] = function(b) {
+            var a = Blockly.Python.valueToCode(b,'SECONDS',Blockly.Python.ORDER_ATOMIC)||1;
+            return `mission.wait(${a})\n`;
         };
-        Blockly.Python['drone_wait']=function(b){var a=Blockly.Python.valueToCode(b,'SECONDS',Blockly.Python.ORDER_ATOMIC)||1;return `drone.wait(${a}, abort_event)\n`;};
-        Blockly.Python['drone_move_meters']=function(b){var n=Blockly.Python.valueToCode(b,'NORTH',Blockly.Python.ORDER_ATOMIC)||0;var e=Blockly.Python.valueToCode(b,'EAST',Blockly.Python.ORDER_ATOMIC)||0;var d=Blockly.Python.valueToCode(b,'DOWN',Blockly.Python.ORDER_ATOMIC)||0;return `drone.move_meters(north_m=${n}, east_m=${e}, down_m=${d}, abort_event=abort_event)\n`;};
-        Blockly.Python['drone_turn']=function(b){var d=Blockly.Python.valueToCode(b,'DEGREES',Blockly.Python.ORDER_ATOMIC)||0;var dir=b.getFieldValue('DIRECTION');return `drone.turn_degrees(${d*parseInt(dir)}, abort_event=abort_event)\n`;};
-        Blockly.Python['drone_check_altitude']=function(block){var comparison=block.getFieldValue('COMPARISON');var altitude=Blockly.Python.valueToCode(block,'ALTITUDE',Blockly.Python.ORDER_ATOMIC)||0;var code=`mission.check_altitude('${comparison}', ${altitude})`;return[code,Blockly.Python.ORDER_FUNCTION_CALL];};
-        Blockly.Python['drone_execute_if']=function(block){var condition=Blockly.Python.valueToCode(block,'CONDITION',Blockly.Python.ORDER_NONE)||'False';var do_code=Blockly.Python.statementToCode(block,'DO');var safe_do_code=JSON.stringify(do_code);var code=`mission.execute_if(${condition}, ${safe_do_code})\n`;return code;};
+        Blockly.Python['drone_move_meters'] = function(b) {
+            var n = Blockly.Python.valueToCode(b,'NORTH',Blockly.Python.ORDER_ATOMIC)||0;
+            var e = Blockly.Python.valueToCode(b,'EAST',Blockly.Python.ORDER_ATOMIC)||0;
+            var d = Blockly.Python.valueToCode(b,'DOWN',Blockly.Python.ORDER_ATOMIC)||0;
+            return `mission.move_meters_safe(${n}, ${e}, ${d})\n`;
+        };
+        Blockly.Python['drone_turn'] = function(b) {
+            var d = Blockly.Python.valueToCode(b,'DEGREES',Blockly.Python.ORDER_ATOMIC)||0;
+            var dir = b.getFieldValue('DIRECTION');
+            return `mission.turn_degrees_safe(${d*parseInt(dir)})\n`;
+        };
+        Blockly.Python['drone_check_altitude'] = function(block) {
+            var comparison = block.getFieldValue('COMPARISON');
+            var altitude = Blockly.Python.valueToCode(block,'ALTITUDE',Blockly.Python.ORDER_ATOMIC)||0;
+            var code = `mission.check_altitude('${comparison}', ${altitude})`;
+            return [code, Blockly.Python.ORDER_FUNCTION_CALL];
+        };
         Blockly.Python['controls_repeat_ext'] = function(block) {
-            var repeats = Blockly.Python.valueToCode(block, 'TIMES', Blockly.Python.ORDER_ATOMIC) || '0';
-            var branch = Blockly.Python.statementToCode(block, 'DO');
+            const repeats =
+                Blockly.Python.valueToCode(block, 'TIMES', Blockly.Python.ORDER_NONE) || '0';
 
-            var code = `
-        mission.repeat_ext(${repeats}, lambda: (
-        ${branch}
-        ))
-        `;
-            return code;
+            const branch = Blockly.Python.statementToCode(block, 'DO');
+
+            const funcName = Blockly.Python.provideFunction_(
+                'repeat_body',
+                `
+        def ${Blockly.Python.FUNCTION_NAME_PLACEHOLDER_}():
+        ${Blockly.Python.prefixLines(branch, '    ')}
+        `
+            );
+
+            return `mission.repeat(${repeats}, ${funcName})\n`;
         };
         Blockly.Python['controls_whileUntil'] = function(block) {
             var until = block.getFieldValue('MODE'); 
@@ -272,34 +289,15 @@
             if(flow === 'BREAK') {
                 code = `
         if abort_event.is_set():
-            raise Exception("Abort mission")
+            raise RuntimeError("MISSION_ABORTED")
         break
         `;
             } else if(flow === 'CONTINUE') {
                 code = `
         if abort_event.is_set():
-            raise Exception("Abort mission")
+            raise RuntimeError("MISSION_ABORTED")
         continue
         `;
-            }
-            return code;
-        };
-        Blockly.Python['controls_if'] = function(block) {
-            var n = 0;
-            var code = '';
-            do {
-                var condition = Blockly.Python.valueToCode(block, 'IF' + n, Blockly.Python.ORDER_NONE) || 'False';
-                var statements = Blockly.Python.statementToCode(block, 'DO' + n);
-                // Escapa o código para passar como string
-                var safe_statements = JSON.stringify(statements);
-                code += `mission.execute_if(${condition}, ${safe_statements})\n`;
-                n++;
-            } while (block.getInput('IF' + n));
-            // else
-            if (block.getInput('ELSE')) {
-                var else_statements = Blockly.Python.statementToCode(block, 'ELSE');
-                var safe_else_statements = JSON.stringify(else_statements);
-                code += `mission.execute_if(True, ${safe_else_statements})\n`;
             }
             return code;
         };
@@ -311,10 +309,8 @@
             var step = Blockly.Python.valueToCode(block, 'BY', Blockly.Python.ORDER_NONE) || '1';
             var branch = Blockly.Python.statementToCode(block, 'DO') || 'pass';
 
-            // Escapando o código do bloco
-            branch = branch.replace(/\n/g, '\n        '); // indentação extra para execução segura
+            branch = branch.replace(/\n/g, '\n        ');
 
-            // Gera uma chamada ao backend execute_for
             var code = `
         mission.execute_for("${variable}", ${from}, ${to}, ${step}, """
         ${branch}
@@ -324,14 +320,19 @@
         };
 
         // ### CORREÇÃO AQUI: Gerador de código descomentado ###
+        // Blockly.Python['drone_set_led'] = function(block) {
+		// 	var pin_number = Blockly.Python.valueToCode(block, 'PIN', Blockly.Python.ORDER_ATOMIC) || '32';
+		// 	var state = block.getFieldValue('STATE');
+		// 	// Cria um dicionário Python formatado como uma string
+		// 	var command_dict = `{'command': 'set_gpio', 'pin': ${pin_number}, 'state': ${state}}`;
+		// 	// Chama a nova função da API que envia o comando pelo socket direto
+		// 	return `mission.send_command_to_pi(${command_dict})\n`;
+		// };
         Blockly.Python['drone_set_led'] = function(block) {
-			var pin_number = Blockly.Python.valueToCode(block, 'PIN', Blockly.Python.ORDER_ATOMIC) || '32';
-			var state = block.getFieldValue('STATE');
-			// Cria um dicionário Python formatado como uma string
-			var command_dict = `{'command': 'set_gpio', 'pin': ${pin_number}, 'state': ${state}}`;
-			// Chama a nova função da API que envia o comando pelo socket direto
-			return `mission.send_command_to_pi(${command_dict})\n`;
-		};
+            var pin = Blockly.Python.valueToCode(block, 'PIN', Blockly.Python.ORDER_ATOMIC) || '32';
+            var state = block.getFieldValue('STATE');
+            return `mission.set_led_safe(${pin}, ${state})\n`;
+        };
 		
 		Blockly.Python['variables_change'] = function(block) {
 			  // Change variable by amount.
@@ -366,6 +367,9 @@
         function switchToManualMode(){ showMainView(manualControlDiv, manualModeBtn); manualControlDiv.style.display = 'flex'; runMissionBtn.style.display = 'none'; abortBtn.style.display = 'none'; pywebview.api.set_manual_mode(true); }
         function switchToGamepadConfig() { showMainView(gamepadConfigDiv, gamepadConfigBtn); runMissionBtn.style.display = 'none'; abortBtn.style.display = 'none'; pywebview.api.set_manual_mode(false); }
         function confirmReboot(){if(confirm("Você tem certeza? A conexão será perdida.")){pywebview.api.drone_reboot_autopilot();}}
+        function updateTelemetry(data) {
+            update_hud(data);
+        }
 
         let listeningFor = null;
         const mappingInputs = {
