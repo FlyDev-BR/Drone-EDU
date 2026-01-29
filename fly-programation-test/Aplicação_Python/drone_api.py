@@ -72,46 +72,70 @@ class DroneAPI:
             mode_id, 0, 0, 0, 0, 0)
         print(f"Comando para definir modo {mode_name} enviado.")
 
-    def wait(self, seconds):
-        """Pausa a execução do script por um número de segundos."""
-        print(f"Aguardando por {seconds} segundos...")
-        time.sleep(seconds)
-        print("Espera finalizada.")
-
-    def turn_degrees(self, degrees, speed=30):
-        """Gira o drone em seu próprio eixo (yaw) em modo de missão (ex: GUIDED)."""
-        print(f"Iniciando giro de {degrees}°...")
+    def turn_degrees(self, degrees, speed=30, abort_event=None):
         direction = 1 if degrees > 0 else -1
         self.master.mav.command_long_send(
             self.master.target_system, self.master.target_component,
             mavutil.mavlink.MAV_CMD_CONDITION_YAW, 0,
-            abs(degrees), speed, direction, 1, 0, 0, 0)
-        wait_time = (abs(degrees) / speed) + 1.0
-        print(f"Aguardando aproximadamente {wait_time:.2f}s para o giro completar.")
-        time.sleep(wait_time)
-        print("Giro concluído.")
+            abs(degrees), speed, direction, 1, 0, 0, 0
+        )
 
-    def move_meters(self, north_m, east_m, down_m):
-        """Move o drone uma distância específica em metros (para missões em bloco)."""
+        steps = int((abs(degrees) / speed) * 10)
+        for _ in range(steps):
+            if abort_event and abort_event.is_set():
+                raise RuntimeError("MISSION_ABORTED")
+            time.sleep(0.1)
+
+    def move_meters(self, north_m, east_m, down_m, abort_event=None):
+        """
+        Move o drone uma distância específica em metros.
+        NED: down_m > 0 desce | down_m < 0 sobe
+        """
         INDOOR_SPEED_MPS = 0.3
         distance = math.sqrt(north_m**2 + east_m**2 + down_m**2)
+
         if distance == 0:
             print("Nenhuma distância para mover.")
             return
+
         duration = distance / INDOOR_SPEED_MPS
         velocity_x = (north_m / distance) * INDOOR_SPEED_MPS
         velocity_y = (east_m / distance) * INDOOR_SPEED_MPS
         velocity_z = (down_m / distance) * INDOOR_SPEED_MPS
-        print(f"Movendo ({north_m}m N, {east_m}m E, {down_m}m D) por {duration:.2f}s.")
+
+        alt_before = self.get_altitude()
+
+        print(
+            f"Movendo ({north_m}m N, {east_m}m E, {down_m}m D) "
+            f"| Altitude antes: {alt_before:.2f} m "
+            f"| duração {duration:.2f}s"
+        )
+
         msg = self.master.mav.set_position_target_local_ned_encode(
-            0, self.master.target_system, self.master.target_component,
-            mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED, 0b0000111111000111,
-            0, 0, 0, velocity_x, velocity_y, velocity_z, 0, 0, 0, 0, 0)
-        for _ in range(int(duration * 5)):
+            0,
+            self.master.target_system,
+            self.master.target_component,
+            mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED,
+            0b0000111111000111,
+            0, 0, 0,
+            velocity_x, velocity_y, velocity_z,
+            0, 0, 0,
+            0, 0
+        )
+
+        for _ in range(int(duration * 10)):
+            if abort_event and abort_event.is_set():
+                self.stop()
+                raise RuntimeError("MISSION_ABORTED")
+
             self.master.mav.send(msg)
-            time.sleep(0.2)
+            time.sleep(0.1)
+
         self.stop()
-        print("Movimento por metros concluído.")
+
+        alt_after = self.get_altitude()
+        print(f"Movimento concluído | Altitude depois: {alt_after:.2f} m")
+
 
     def stop(self):
         """Envia um comando para parar todo o movimento (usado internamente por move_meters)."""
@@ -157,3 +181,19 @@ class DroneAPI:
             
         print("Comando de GPIO enviado para todos os componentes.")
         time.sleep(0.5)
+
+     # ===================== UTIL =====================
+    def wait(self, seconds, abort_event=None):
+        for _ in range(int(seconds * 10)):
+            if abort_event and abort_event.is_set():
+                raise RuntimeError("MISSION_ABORTED")
+            time.sleep(0.1)
+
+
+    def get_altitude(self):
+        msg = self.master.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=1)
+        if not msg:
+            return 0.0
+        return msg.relative_alt / 1000.0
+
+   
