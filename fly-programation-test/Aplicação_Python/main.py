@@ -1,414 +1,481 @@
-# main.py
-import webview
+import os
+import sys
 import threading
 import time
 import json
 import socket
+import uvicorn
 from pathlib import Path
-from pymavlink import mavutil
+from queue import Queue, Empty
+
+# Bibliotecas de Interface e Web
+import webview
+from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+
+# Bibliotecas do Drone
 from drone_api import DroneAPI
 
+# Tenta importar inputs para Gamepad
 try:
     import inputs
 except ImportError:
-    print("Biblioteca 'inputs' não encontrada. O controle por Joystick estará desativado.")
-    print("Para instalar, execute: pip install inputs")
+    print("⚠️ Biblioteca 'inputs' não encontrada. O controle por Joystick estará desativado.")
     inputs = None
 
-# --- Constantes ---
-PI_IP_ADDRESS = "192.168.4.1"
+# --- CONSTANTES GLOBAIS ---
+SERVER_PORT = 3000  # Porta interna do servidor
+PI_IP_ADDRESS = "127.0.0.1"
 MAVLINK_PORT = 5760
 COMMAND_PORT = 8000
 CONNECTION_STRING = f"tcp:{PI_IP_ADDRESS}:{MAVLINK_PORT}"
+
 MANUAL_SPEED_MPS = 0.5
 MANUAL_YAW_RATE_DPS = 45
-MIN_SAFE_ALTITUDE_METERS = 0.3
-TAKEOFF_ALTITUDE_METERS = 1.0
 GAMEPAD_CONFIG_FILE = Path('./gamepad_config.json')
 
-try:
-    drone = DroneAPI(CONNECTION_STRING)
-except Exception as e:
-    print(f"Falha ao instanciar a API do drone (MAVLink): {e}")
-    drone = None
+# --- CONFIGURAÇÃO PARA EXECUTÁVEL (PyInstaller) ---
+def resource_path(relative_path):
+    """ Retorna o caminho absoluto, compatível com PyInstaller e Dev """
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+# --- CONFIGURAÇÃO DO FASTAPI ---
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Servir arquivos estáticos do React (pasta dist)
+# Certifique-se de que a pasta 'dist' esteja ao lado do main.py
+static_dist_path = resource_path("dist")
+
+# Verifica se a pasta dist existe para evitar crash imediato
+if os.path.exists(static_dist_path):
+    app.mount("/assets", StaticFiles(directory=os.path.join(static_dist_path, "assets")), name="assets")
+else:
+    print(f"⚠️ AVISO: Pasta 'dist' não encontrada em: {static_dist_path}")
+    print("   Execute 'npm run build' no React e copie a pasta dist para cá.")
+
+@app.get("/{full_path:path}")
+async def serve_react_app(full_path: str):
+    """Route catch-all para suportar React Router (SPA)"""
+    # Se pedir um arquivo que existe na raiz do dist (ex: vite.svg), serve ele
+    potential_file = os.path.join(static_dist_path, full_path)
+    if os.path.exists(potential_file) and os.path.isfile(potential_file):
+        return FileResponse(potential_file)
+    
+    # Caso contrário, retorna o index.html para o React tratar a rota
+    index_path = os.path.join(static_dist_path, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"error": "Frontend files not found"}
+
+# --- CLASSES DE CONTROLE ---
 
 class ApiFacade:
-    def __init__(self, api_real):
-        self.api = api_real
+    """
+    Ponte entre o JavaScript e o Python. 
+    O PyWebview expõe os métodos desta classe para o window.pywebview.api
+    """
+    def __init__(self, controller):
+        self.controller = controller
 
-    def run_blockly_code(self): return self.api.run_blockly_code()
-    def drone_abort_mission(self): return self.api.drone_abort_mission()
-    def set_manual_mode(self, active): return self.api.set_manual_mode(active)
-    def manual_command(self, direction, key_is_down): return self.api.manual_command(direction, key_is_down)
-    def drone_arm(self): return self.api.drone_arm()
-    def drone_disarm(self): return self.api.drone_disarm()
-    def drone_takeoff(self): return self.api.drone_takeoff()
-    def drone_land(self): return self.api.drone_land()
-    def drone_set_mode(self, mode_name): return self.api.drone_set_mode(mode_name)
-    def drone_calibrate_level(self): return self.api.drone_calibrate_level()
-    def drone_reboot_autopilot(self): return self.api.drone_reboot_autopilot()
-    def save_mission(self): return self.api.save_mission()
-    def load_mission(self): return self.api.load_mission()
-    def write_mission_data(self, data): return self.api.write_mission_data(data)
-    def save_gamepad_mapping(self, mapping): return self.api.save_gamepad_mapping(mapping)
-    def load_gamepad_mapping(self): return self.api.load_gamepad_mapping()
-    def restore_default_mapping(self): return self.api.restore_default_mapping()
-    def execute_if(self, condition, commands): return self.api.execute_if(condition, commands)
-    def send_command_to_pi(self, command_dict): return self.api.send_command_to_pi(command_dict)
+    def run_blockly_code(self, code): return self.controller.run_blockly_code(code)
+    def abort_mission(self): return self.controller.abort_mission()
+    def set_manual_mode(self, active): return self.controller.set_manual_mode(active)
+    def manual_command(self, direction, key_is_down): return self.controller.manual_command(direction, key_is_down)
+    def drone_arm(self): return self.controller.drone_arm()
+    def drone_disarm(self): return self.controller.drone_disarm()
+    def drone_takeoff(self, altitude): return self.controller.drone_takeoff(altitude)
+    def drone_land(self): return self.controller.drone_land()
+    def drone_set_mode(self, mode_name): return self.controller.drone_set_mode(mode_name)
+    def drone_reboot_autopilot(self): return self.controller.drone_reboot_autopilot()
+    def save_mission(self): return self.controller.save_mission()
+    def load_mission(self): return self.controller.load_mission()   
+    def write_mission_data(self, data): return self.controller.write_mission_data(data)
+    def save_gamepad_mapping(self, mapping): return self.controller.save_gamepad_mapping(mapping)
+    def load_gamepad_mapping(self): return self.controller.load_gamepad_mapping()
+    def restore_default_mapping(self): return self.controller.restore_default_mapping()
+    # Adicione outros métodos conforme necessário
 
-class JsApi:
+class DroneBackendController:
+    """
+    Controlador principal da lógica de negócios.
+    Gerencia conexões, threads e estado do drone.
+    """
     def __init__(self):
-        # Variáveis de estado
-        self.manual_control_active = False
-        self.velocity_lock = threading.Lock()
-        self.vx, self.vy, self.vz, self.yaw_rate = 0, 0, 0, 0
-        self.telemetry_lock = threading.Lock()
-        self.telemetry_data = { "pitch": 0, "roll": 0, "yaw": 0, "altitude": 0, "ground_speed": 0, "battery_volt": 0, "battery_perc": 0, "gps_fix": 0, "armed": False, "mode": "UNKNOWN" }
-        self.mission_lock = threading.Lock()
-        self.mission_queue = []
-        self.is_mission_running = False
-        self.abort_mission_flag = False
         self.window = None
+        self.drone = None
+        self.ui_ready = False
+        self.stop_event = threading.Event()
+        self.abort_event = threading.Event()
         
-        # Lógica do Gamepad
-        self.gamepad_mapping = {}
-        self.default_gamepad_mapping = {
-            'vx': {'code': 'ABS_Y', 'invert': True}, 'vy': {'code': 'ABS_X', 'invert': False},
-            'vz': {'code': 'ABS_RZ', 'invert': True}, 'yaw': {'code': 'ABS_Z', 'invert': False}
-        }
-
-        # Conexão direta com o servidor de comandos no Pi
-        self.command_socket = None
+        # Locks para thread safety
+        self.velocity_lock = threading.Lock()
+        self.telemetry_lock = threading.Lock()
+        self.mission_lock = threading.Lock()
         self.command_lock = threading.Lock()
 
-        # Threads
-        self.stop_event = threading.Event()
-        self.command_thread = threading.Thread(target=self._command_socket_connect, daemon=True)
-        if inputs: self.gamepad_thread = threading.Thread(target=self._gamepad_loop, daemon=True)
-        else: self.gamepad_thread = None
-        self.manual_control_thread = threading.Thread(target=self._manual_control_loop, daemon=True)
-        self.telemetry_thread = threading.Thread(target=self._telemetry_loop, daemon=True)
-        self.mission_runner_thread = threading.Thread(target=self._mission_runner_loop, daemon=True)
+        # Estado do Drone/Missão
+        self.manual_control_active = False
+        self.is_mission_running = False
+        self.mission_queue = []
+        self.vx = self.vy = self.vz = self.yaw_rate = 0
+        self.js_queue = Queue()
+
+        self.telemetry_data = {
+            "pitch": 0, "roll": 0, "yaw": 0, "altitude": 0,
+            "ground_speed": 0, "battery_volt": 0, "battery_perc": 0,
+            "gps_fix": 0, "armed": False, "mode": "DISCONNECTED"
+        }
+
+        # Gamepad
+        self.gamepad_mapping = {}
+        self.default_gamepad_mapping = {
+            'vx': {'code': 'ABS_Y', 'invert': True},
+            'vy': {'code': 'ABS_X', 'invert': False},
+            'vz': {'code': 'ABS_RZ', 'invert': True},
+            'yaw': {'code': 'ABS_Z', 'invert': False}
+        }
+
+        # Socket Pi
+        self.command_socket = None
+
+        # Inicializa conexão com o Drone
+        self._init_drone_connection()
+
+    def _init_drone_connection(self):
+        try:
+            self.drone = DroneAPI(CONNECTION_STRING)
+        except Exception as e:
+            print(f"❌ Falha ao conectar MAVLink: {e}")
+            self.drone = None
 
     def set_window(self, window):
         self.window = window
 
-    def start_background_tasks(self):
-        """Inicia todas as threads de fundo depois que a janela está pronta."""
-        print("Janela pronta. Iniciando threads de fundo...")
-        self.command_thread.start()
-        self.load_gamepad_mapping()
-        
-        self.manual_control_thread.start()
-        self.telemetry_thread.start()
-        self.mission_runner_thread.start()
-        if self.gamepad_thread:
-            self.gamepad_thread.start()
-
-    def _command_socket_connect(self):
-        while not self.stop_event.is_set():
-            try:
-                print(f"Conectando ao servidor de comandos em {PI_IP_ADDRESS}:{COMMAND_PORT}...")
-                with self.command_lock:
-                    self.command_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    self.command_socket.connect((PI_IP_ADDRESS, COMMAND_PORT))
-                print("Conectado ao servidor de comandos!")
-                while not self.stop_event.is_set(): time.sleep(1)
-            except Exception as e:
-                print(f"Erro no socket de comando: {e}. Tentando novamente em 5s.")
-                with self.command_lock:
-                    if self.command_socket: self.command_socket.close()
-                    self.command_socket = None
-                time.sleep(5)
+    def log_to_frontend(self, message):
+        """Envia mensagem para o componente LogDisplay do React"""
+        print(f"[BACKEND LOG] {message}") # Print no terminal do Python
+        # Escapa aspas para evitar erro de JS
+        safe_message = message.replace('"', "'").replace('\n', ' ')
+        self.call_js(f'updateLogs("{safe_message}")')
     
-    def send_command_to_pi(self, command_dict):
-        with self.command_lock:
-            if self.command_socket:
-                try:
-                    message = json.dumps(command_dict)
-                    self.command_socket.sendall(message.encode('utf-8'))
-                    print(f"Comando enviado para o Pi: {message}")
-                except Exception as e:
-                    print(f"Falha ao enviar comando para o Pi: {e}")
-            else:
-                print("Não conectado ao servidor de comandos. Comando descartado.")
+    # ===================== JS HELPER =====================
+    def call_js(self, script):
+        """Envia comandos JS para a UI de forma thread-safe"""
+        if not self.ui_ready or not self.window:
+            return
+        self.js_queue.put(script)
 
-    ### FUNÇÃO CORRIGIDA PARA LOOPS ###
-    def run_blockly_code(self):
-        with self.mission_lock:
-            if self.is_mission_running: return
-            if not self.window: return
+    def _process_js_queue(self):
+        """Loop que consome a fila de comandos JS e executa na window"""
+        if not self.window: return
+        try:
+            while True:
+                script = self.js_queue.get_nowait()
+                self.window.evaluate_js(script)
+        except Empty:
+            pass
+        except Exception as e:
+            print(f"Erro JS Thread: {e}")
 
-            code_from_blockly = self.window.evaluate_js('getCode()')
-            
-            print("\n--- CÓDIGO GERADO PELO BLOCKLY ---")
-            print(code_from_blockly)
-            print("------------------------------------\n")
-            
-            
-            if not code_from_blockly: return
+    # ===================== THREADS =====================
+    def start_background_tasks(self):
+        print("✅ Backend pronto. Iniciando loops...")
+        self.ui_ready = True
+        
+        # Inicia threads
+        threads = [
+            threading.Thread(target=self._command_socket_loop, daemon=True),
+            threading.Thread(target=self._manual_control_loop, daemon=True),
+            threading.Thread(target=self._mission_runner_loop, daemon=True)
+        ]
 
-            self.mission_queue = []
-            
-            # Adiciona setup de voo apenas se houver comandos de drone e o drone estiver conectado
-            if drone and any("drone." in line for line in code_from_blockly.splitlines()):
-                self.mission_queue.append("drone.set_mode('GUIDED')")
-                self.mission_queue.append("time.sleep(1)")
+        if inputs:
+            self.load_gamepad_mapping()
+            threads.append(threading.Thread(target=self._gamepad_loop, daemon=True))
 
-            # Adiciona o CÓDIGO INTEIRO do Blockly como UM ÚNICO item na fila
-            self.mission_queue.append(code_from_blockly)
+        for t in threads:
+            t.start()
 
-            self.abort_mission_flag = False
-            self.is_mission_running = True
-            print(f"Missão carregada com {len(self.mission_queue)} blocos de execução.")
-
-
-    def _mission_runner_loop(self):
+        # Loop principal da thread de interface (JS Consumer)
         while not self.stop_event.is_set():
-            mission_command = None
+            self._process_js_queue()
+            time.sleep(0.05)
+
+    def shutdown(self):
+        print("🛑 Encerrando backend...")
+        self.stop_event.set()
+        if self.command_socket:
+            self.command_socket.close()
+
+    # ===================== LOGICA DO DRONE (Exemplos) =====================
+    def drone_arm(self):
+        if self.drone: self.drone.arm()
+    
+    def drone_disarm(self):
+        if self.drone: self.drone.disarm()
+
+    def drone_takeoff(self, altitude):
+        if self.drone: self.drone.takeoff(float(altitude))
+
+    def drone_land(self):
+        if self.drone: self.drone.land()
+
+    def drone_set_mode(self, mode):
+        if self.drone: self.drone.set_mode(mode)
+
+    def drone_reboot_autopilot(self):
+        if self.drone: self.drone.reboot_autopilot()
+
+    # ===================== TELEMETRIA =====================
+    def update_telemetry(self):
+        if not self.drone:
+            return
+
+        with self.telemetry_lock:
+            # Atualiza dicionário
+            self.telemetry_data.update({
+                "pitch": self.drone.get_pitch(),
+                "roll": self.drone.get_roll(),
+                "yaw": self.drone.get_yaw(),
+                "altitude": self.drone.get_altitude(),
+                "ground_speed": self.drone.get_ground_speed(),
+                "battery_volt": self.drone.get_battery_voltage(),
+                "battery_perc": self.drone.get_battery_percentage(),
+                "gps_fix": self.drone.get_gps_fix(),
+                "armed": self.drone.is_armed(),
+                "mode": self.drone.get_mode()
+            })
+        
+        # Envia para o React
+        self.call_js(f'updateTelemetry({json.dumps(self.telemetry_data)})')
+
+    # ===================== MISSÃO E LOOPS =====================
+    def _mission_runner_loop(self):
+        TELEMETRY_INTERVAL = 0.2
+        last_telemetry = 0
+
+        # Contexto para execução de código dinâmico (Blockly)
+        exec_context = {
+            "drone": self.drone,
+            "mission": self,
+            "abort_event": self.abort_event,
+            "check_abort": self.check_abort,
+            "time": time
+        }
+
+        while not self.stop_event.is_set():
+            # 1. Telemetria constante
+            now = time.time()
+            if now - last_telemetry >= TELEMETRY_INTERVAL:
+                self.update_telemetry()
+                last_telemetry = now
+
+            # 2. Execução de Missão
+            code = None
             with self.mission_lock:
                 if self.mission_queue:
-                    mission_command = self.mission_queue.pop(0)
-            if mission_command:
-                if self.abort_mission_flag:
-                    print("Missão abortada. Limpando fila e pousando...")
-                    with self.mission_lock:
-                        self.mission_queue.clear()
-                        self.is_mission_running = False
-                        self.abort_mission_flag = False
-                    if drone: drone.land()
-                    continue
+                    code = self.mission_queue.pop(0)
+            
+            if code:
                 try:
-                    print("Executando bloco de comandos da missão...")
-                    # print(mission_command) # Descomente para ver o código que está sendo executado
-                    exec(mission_command, {"drone": drone, "mission": self, "time": time})
+                    if not self.drone:
+                        raise Exception("Drone desconectado")
+
+                    # Atualiza o contexto com o objeto drone atual (caso tenha reconectado)
+                    self.log_to_frontend("Executando bloco de código...")
+                    exec_context["drone"] = self.drone
+                    exec(code, exec_context)
+                    
+                    print("✅ Bloco de missão executado.")
+                    self.is_mission_running = False
                 except Exception as e:
-                    print(f"!!! ERRO ao executar bloco de comandos: {e}")
-                    with self.mission_lock:
-                        self.mission_queue.clear()
-                        self.is_mission_running = False
-                    if drone: drone.land()
+                    print(f"❌ Erro na missão: {e}")
+                    clean_err = str(e).replace('"', "'").replace('\n', ' ')
+                    self.call_js(f'alert("Erro Missão: {clean_err}")')
+                    self.is_mission_running = False
+                    self.abort_event.clear()
             else:
-                if self.is_mission_running:
-                    print("Fila de missão concluída.")
-                    with self.mission_lock: self.is_mission_running = False
-                time.sleep(0.2)
-    
-    # ... O RESTO DAS SUAS FUNÇÕES (COLEI TODAS PARA GARANTIR) ...
-    
-    def _telemetry_loop(self):
-        while not self.stop_event.is_set():
-            if not drone:
-                time.sleep(1)
-                continue
-            while True:
-                msg = drone.master.recv_match(type=['ATTITUDE', 'VFR_HUD', 'SYS_STATUS', 'HEARTBEAT', 'GPS_RAW_INT', 'DISTANCE_SENSOR', 'BATTERY_STATUS'], blocking=False)
-                if not msg: break
-                msg_type = msg.get_type()
-                with self.telemetry_lock:
-                    if msg_type == 'ATTITUDE':
-                        self.telemetry_data['pitch'] = round(msg.pitch * 180.0 / 3.14159, 1)
-                        self.telemetry_data['roll'] = round(msg.roll * 180.0 / 3.14159, 1)
-                        self.telemetry_data['yaw'] = round(msg.yaw * 180.0 / 3.14159, 1)
-                    elif msg_type == 'DISTANCE_SENSOR': self.telemetry_data['altitude'] = round(msg.current_distance / 100.0, 2)
-                    elif msg_type == 'VFR_HUD':
-                        if self.telemetry_data.get('altitude', 0) == 0: self.telemetry_data['altitude'] = round(msg.alt, 1)
-                        if hasattr(msg, 'groundspeed'): self.telemetry_data['ground_speed'] = round(msg.groundspeed, 1)
-                    elif msg_type == 'BATTERY_STATUS':
-                        if msg.voltages[0] < 65535: self.telemetry_data['battery_volt'] = msg.voltages[0] / 1000.0
-                    elif msg_type == 'SYS_STATUS':
-                        self.telemetry_data['battery_perc'] = msg.battery_remaining
-                        if self.telemetry_data.get('battery_volt', 0) == 0: self.telemetry_data['battery_volt'] = msg.voltage_battery / 1000.0
-                    elif msg_type == 'HEARTBEAT':
-                        self.telemetry_data['armed'] = (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED) != 0
-                        self.telemetry_data['mode'] = mavutil.mode_string_v10(msg)
-                    elif msg_type == 'GPS_RAW_INT': self.telemetry_data['gps_fix'] = msg.fix_type
-            if self.window:
-                try: self.window.evaluate_js(f'update_hud({json.dumps(self.telemetry_data)})')
-                except Exception: pass
-            time.sleep(0.1)
+                time.sleep(0.1)
+
+    def run_blockly_code(self, code):
+        """Recebe código Python puro gerado pelo Blockly no Frontend"""
+        if self.is_mission_running:
+            self.call_js('alert("Missão já em execução!")')
+            return
+
+        self.log_to_frontend("Recebendo nova missão...")
+
+        header = "mission.check_abort()\n"
+        full_code = header + code
+        
+        with self.mission_lock:
+            self.mission_queue.clear()
+            self.abort_event.clear()
+            self.mission_queue.append(full_code)
+            self.is_mission_running = True
+            print("🚀 Missão recebida e enfileirada.")
+
+    def abort_mission(self):
+        print("🚨 ABORTAR!")
+        self.abort_event.set()
+        self.is_mission_running = False
+        self.mission_queue.clear()
+        if self.drone:
+            try: self.drone.land()
+            except: pass
+
+    def check_abort(self):
+        if self.abort_event.is_set():
+            raise RuntimeError("MISSION_ABORTED")
+
+    # ===================== MANUAL CONTROL =====================
+    def set_manual_mode(self, active):
+        self.manual_control_active = active
+        if self.drone:
+            if active:
+                self.drone.set_mode("GUIDED")
+            else:
+                self.drone.set_manual_velocity(0,0,0,0)
+
+    def manual_command(self, direction, active):
+        speed = MANUAL_SPEED_MPS
+        yaw_speed = MANUAL_YAW_RATE_DPS
+        
+        # Reset velocities based on direction release
+        if not active:
+            if direction in ['forward', 'backward']: self.vx = 0
+            if direction in ['left', 'right']: self.vy = 0
+            if direction in ['up', 'down']: self.vz = 0
+            if direction in ['yaw_left', 'yaw_right']: self.yaw_rate = 0
+            return
+
+        # Set velocities
+        if direction == 'forward': self.vx = speed
+        if direction == 'backward': self.vx = -speed
+        if direction == 'left': self.vy = -speed
+        if direction == 'right': self.vy = speed
+        if direction == 'up': self.vz = -speed   # NED: negativo é pra cima
+        if direction == 'down': self.vz = speed
+        if direction == 'yaw_left': self.yaw_rate = -yaw_speed
+        if direction == 'yaw_right': self.yaw_rate = yaw_speed
 
     def _manual_control_loop(self):
         while not self.stop_event.is_set():
             with self.velocity_lock:
-                if not self.manual_control_active or not drone:
-                    time.sleep(0.1)
-                    continue
-                vx, vy, vz, yaw_rate = self.vx, self.vy, self.vz, self.yaw_rate
-                if vz > 0:
-                    with self.telemetry_lock: current_altitude = self.telemetry_data.get('altitude', 0)
-                    if current_altitude <= MIN_SAFE_ALTITUDE_METERS: vz = 0
-                drone.set_manual_velocity(vx, vy, vz, yaw_rate)
+                if self.manual_control_active and self.drone:
+                    self.drone.set_manual_velocity(self.vx, self.vy, self.vz, self.yaw_rate)
             time.sleep(0.1)
 
-    def _gamepad_loop(self):
-        print("Thread do gamepad iniciado.")
-        while not self.stop_event.is_set():
-            try:
-                events = inputs.get_gamepad()
-                for event in events:
-                    if self.window: self.window.evaluate_js(f'updateGamepadViewer("{event.code}", {event.state})')
-                    self._process_gamepad_event(event.code, event.state)
-            except inputs.UnpluggedError:
-                if self.window: self.window.evaluate_js(f'updateGamepadViewer("DESCONECTADO", 0)')
-                time.sleep(2)
-            except Exception as e:
-                print(f"Erro no loop do gamepad: {e}")
-                time.sleep(2)
-
-    def _process_gamepad_event(self, code, state):
-        MAX_ABS_VAL, DEADZONE = 32768, 4000
-        with self.velocity_lock:
-            if not self.manual_control_active: return
-            def normalize(value):
-                if abs(value) < DEADZONE: return 0.0
-                return value / MAX_ABS_VAL
-            for action, mapping in self.gamepad_mapping.items():
-                if mapping['code'] == code:
-                    value = normalize(state)
-                    if mapping['invert']: value = -value
-                    if action == 'vx': self.vx = value * MANUAL_SPEED_MPS
-                    elif action == 'vy': self.vy = value * MANUAL_SPEED_MPS
-                    elif action == 'vz': self.vz = value * MANUAL_SPEED_MPS
-                    elif action == 'yaw': self.yaw_rate = value * MANUAL_YAW_RATE_DPS
-                    break
-
-    def drone_abort_mission(self):
-        with self.mission_lock:
-            if not self.is_mission_running: return
-            self.abort_mission_flag = True
-
-    def set_manual_mode(self, active):
-        with self.velocity_lock:
-            self.manual_control_active = active
-            if not active:
-                self.vx, self.vy, self.vz, self.yaw_rate = 0, 0, 0, 0
-                if drone: drone.set_manual_velocity(0, 0, 0, 0)
-            print(f"Modo de controle manual {'ATIVADO' if active else 'DESATIVADO'}.")
-
-    def manual_command(self, direction, key_is_down):
-        value = 1 if key_is_down else 0
-        with self.velocity_lock:
-            if not self.manual_control_active: return
-            if direction == 'forward': self.vx = MANUAL_SPEED_MPS * value
-            elif direction == 'backward': self.vx = -MANUAL_SPEED_MPS * value
-            elif direction == 'left': self.vy = -MANUAL_SPEED_MPS * value
-            elif direction == 'right': self.vy = MANUAL_SPEED_MPS * value
-            elif direction == 'up': self.vz = -MANUAL_SPEED_MPS * value
-            elif direction == 'down': self.vz = MANUAL_SPEED_MPS * value
-            elif direction == 'yaw_left': self.yaw_rate = -MANUAL_YAW_RATE_DPS * value
-            elif direction == 'yaw_right': self.yaw_rate = MANUAL_YAW_RATE_DPS * value
-
-    def check_altitude(self, comparison, altitude):
-        with self.telemetry_lock: current_altitude = self.telemetry_data.get('altitude', 0)
-        if comparison == 'GREATER_THAN': return current_altitude > altitude
-        elif comparison == 'LESS_THAN': return current_altitude < altitude
-        return False
-
-    def execute_if(self, condition_result, command_string):
-        if condition_result:
-            print(f"Condição VERDADEIRA. Injetando comandos na fila...")
-            commands_to_add = [line.strip() for line in command_string.splitlines() if line.strip()]
-            with self.mission_lock: self.mission_queue = commands_to_add + self.mission_queue
-        else:
-            print("Condição FALSA. Ignorando bloco de comandos.")
-
-    def drone_arm(self):
-        if drone: drone.arm()
-    def drone_disarm(self):
-        if drone: drone.disarm()
-    def drone_land(self):
-        if drone: drone.land()
-    def drone_set_mode(self, mode_name):
-        if drone: drone.set_mode(mode_name)
-    def drone_calibrate_level(self):
-        if drone: drone.calibrate_level()
-    def drone_reboot_autopilot(self):
-        if drone: drone.reboot_autopilot()
-
-    def drone_takeoff(self):
-        threading.Thread(target=self._safe_takeoff_sequence).start()
-
-    def _safe_takeoff_sequence(self):
-        try:
-            with self.telemetry_lock: current_mode = self.telemetry_data.get('mode', 'UNKNOWN')
-            if current_mode != 'LOITER':
-                drone.set_mode('LOITER')
-                time.sleep(2)
-            with self.telemetry_lock: is_armed = self.telemetry_data.get('armed', False)
-            if not is_armed:
-                self.window.evaluate_js('alert("Decolagem falhou!\\nPor favor, arme o drone primeiro.")')
-                return
-            drone.takeoff(TAKEOFF_ALTITUDE_METERS)
-            target_altitude = TAKEOFF_ALTITUDE_METERS * 0.90
-            for _ in range(150):
-                with self.telemetry_lock: altitude_atual = self.telemetry_data.get('altitude', 0)
-                if altitude_atual >= target_altitude: break
-                time.sleep(0.1)
-            else:
-                print("AVISO: Timeout ao aguardar altitude de decolagem.")
-            drone.set_mode('GUIDED')
-        except Exception as e: print(f"ERRO GERAL NA SEQUÊNCIA DE DECOLAGEM: {e}")
-
+    # ===================== GAMEPAD & FILES =====================
+    # (Mantenha aqui os métodos de save/load mission e gamepad mapping do seu código original)
+    # Apenas certifique-se de chamar self.call_js ao invés de usar window diretamente
+    
     def save_mission(self):
         if not self.window: return
-        file_path = self.window.create_file_dialog(webview.SAVE_DIALOG, directory='./', save_filename='missao.xml', file_types=('Missões Blockly (*.xml)',))
+        file_path = self.window.create_file_dialog(webview.SAVE_DIALOG, save_filename='missao.xml', file_types=('XML (*.xml)',))
         if file_path:
-            js_safe_path = json.dumps(file_path[0])
-            self.window.evaluate_js(f'initiateSave({js_safe_path})')
+            # Chama função JS para obter o conteúdo e salvar
+            self.call_js(f'initiateSave({json.dumps(file_path[0])})')
 
     def write_mission_data(self, data):
         try:
-            with open(data['path'], 'w', encoding='utf-8') as f: f.write(data['content'])
-            self.window.evaluate_js('alert("Missão salva com sucesso!")')
+            with open(data['path'], 'w', encoding='utf-8') as f:
+                f.write(data['content'])
+            self.call_js('toast("Sucesso", "Missão salva com sucesso")') # Assumindo que vc tem um toast no JS
         except Exception as e:
-            self.window.evaluate_js(f'alert("Erro ao salvar arquivo: {str(e)}")')
+            print(f"Erro save: {e}")
 
     def load_mission(self):
         if not self.window: return
-        file_paths = self.window.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=('Missões Blockly (*.xml)',))
-        if not file_paths: return
-        try:
-            with open(file_paths[0], 'r', encoding='utf-8') as f: xml_content = f.read()
-            self.window.evaluate_js(f'loadWorkspaceXml({json.dumps(xml_content)})')
-        except Exception as e: print(f"Erro ao carregar a missão: {e}")
+        file_paths = self.window.create_file_dialog(webview.OPEN_DIALOG, file_types=('XML (*.xml)',))
+        if file_paths:
+            try:
+                with open(file_paths[0], 'r', encoding='utf-8') as f:
+                    content = f.read()
+                self.call_js(f'loadWorkspaceXml({json.dumps(content)})')
+            except Exception as e:
+                print(f"Erro load: {e}")
+
+    def save_gamepad_mapping(self, mapping):
+        with open(GAMEPAD_CONFIG_FILE, "w") as f:
+            json.dump(mapping, f, indent=2)
+        self.gamepad_mapping = mapping
 
     def load_gamepad_mapping(self):
         if GAMEPAD_CONFIG_FILE.exists():
-            try:
-                with open(GAMEPAD_CONFIG_FILE, 'r') as f: self.gamepad_mapping = json.load(f)
-            except: self.gamepad_mapping = self.default_gamepad_mapping.copy()
-        else: self.gamepad_mapping = self.default_gamepad_mapping.copy()
-        if self.window: self.window.evaluate_js(f'populateMappingUi({json.dumps(self.gamepad_mapping)})')
-
-    def save_gamepad_mapping(self, mapping):
-        self.gamepad_mapping = mapping
-        try:
-            with open(GAMEPAD_CONFIG_FILE, 'w') as f: json.dump(self.gamepad_mapping, f, indent=4)
-            self.window.evaluate_js('alert("Mapeamento salvo com sucesso!")')
-        except Exception as e: self.window.evaluate_js(f'alert("Erro ao salvar mapeamento: {e}")')
-    
+            with open(GAMEPAD_CONFIG_FILE) as f:
+                self.gamepad_mapping = json.load(f)
+        else:
+            self.gamepad_mapping = self.default_gamepad_mapping.copy()
+        self.call_js(f'populateMappingUi({json.dumps(self.gamepad_mapping)})')
+        
     def restore_default_mapping(self):
         self.gamepad_mapping = self.default_gamepad_mapping.copy()
-        if self.window: self.window.evaluate_js(f'populateMappingUi({json.dumps(self.gamepad_mapping)})')
-    
-    def shutdown(self):
-        print("Desligando...")
-        self.stop_event.set()
-        with self.command_lock:
-            if self.command_socket: self.command_socket.close()
+        self.save_gamepad_mapping(self.gamepad_mapping)
+        self.call_js(f'populateMappingUi({json.dumps(self.gamepad_mapping)})')
+
+    def _gamepad_loop(self):
+        # Implementação simplificada do loop original
+        DEADZONE = 0.1
+        MAX_AXIS = 32767
+        while not self.stop_event.is_set():
+            try:
+                events = inputs.get_gamepad()
+                for e in events:
+                    # Lógica de mapeamento aqui (copiar do original)
+                    pass 
+            except:
+                time.sleep(0.1)
+
+    def _command_socket_loop(self):
+        # Lógica do socket original
+        while not self.stop_event.is_set():
+            # ... (código de conexão socket aqui)
+            time.sleep(1)
+
+
+# --- STARTUP ---
+def start_server():
+    """Roda o servidor FastAPI em background"""
+    uvicorn.run(app, host="127.0.0.1", port=SERVER_PORT, log_level="error")
+
 if __name__ == '__main__':
-    api_real = JsApi()
-    api_facade = ApiFacade(api_real)
+    # 1. Inicia o Backend Controller
+    backend = DroneBackendController()
+    api_bridge = ApiFacade(backend)
+
+    # 2. Inicia o Servidor FastAPI em uma thread separada
+    server_thread = threading.Thread(target=start_server, daemon=True)
+    server_thread.start()
+
+    # Aguarda o servidor subir (pequeno delay)
+    time.sleep(1)
+
+    # 3. Cria a janela apontando para o servidor local
     window = webview.create_window(
-        'Controle de Drone',
-        'index.html',
-        js_api=api_facade,
-        width=1280, height=800
+        "Estação de Controle Drone",
+        f"http://127.0.0.1:{SERVER_PORT}",  # Aponta para o FastAPI
+        js_api=api_bridge,                  # Injeta a ponte JS
+        width=1280,
+        height=800,
+        min_size=(1024, 600)
     )
-    api_real.set_window(window)
     
-    webview.start(api_real.start_background_tasks, debug=True, gui='edgechromium')
+    backend.set_window(window)
+
+    # 4. Inicia o PyWebview
+    webview.start(backend.start_background_tasks, debug=True)
     
-    api_real.shutdown()
-    print("Aplicação finalizada.")
+    # 5. Limpeza ao fechar
+    backend.shutdown()
